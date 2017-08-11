@@ -170,7 +170,7 @@ double fit_dgaus_sameMean(TH1D* histogram)
     //end of quick fit
 
     //create the fit function
-    TF1 *total = new TF1("total","[0]*exp(-0.5*((x-[1])/[2])**2)+[3]*exp(-0.5*((x-[1])/[4])**2)",-1*sigma_hist+offset_hist,1*sigma_hist+offset_hist);
+    TF1 *total = new TF1("total","[0]*exp(-0.5*((x-[1])/[2])**2)+[3]*exp(-0.5*((x-[1])/[4])**2)",-2*sigma_hist+offset_hist,2*sigma_hist+offset_hist);
 
     total->SetParNames("p_{tails}","#mu_{tails}","#sigma_{tails}","p_{core}","#sigma_{core}");
 
@@ -228,9 +228,9 @@ double fit_dgaus_sameMean(TH1D* histogram)
     }
     else
     {
-        sigma_core = total->GetParameter(5);
+        sigma_core = total->GetParameter(4);
     }
-//    TF1 *total = new TF1("total","[0]*exp(-0.5*((x-[1])/[2])**2)+[3]*exp(-0.5*((x-[1])/[4])**2)"
+    //    TF1 *total = new TF1("total","[0]*exp(-0.5*((x-[1])/[2])**2)+[3]*exp(-0.5*((x-[1])/[4])**2)"
 
     res_fin_weight=sqrt(
                 (total->GetParameter(0) * TMath::Power(total->GetParameter(2),3) + total->GetParameter(3) * TMath::Power(total->GetParameter(4),3)  )
@@ -347,4 +347,66 @@ double fit_dgaus(TH1D* histogram)
 
 
     return res_fin;
+}
+void GiveEtaCorrection(vector <int> *nOfStrip, vector <double> *qOfStrip, double &eta_corr, double &PosOfLeft)
+{
+    double largerStipQ=-10000.0;
+    double largerStipN=0.0;
+    eta_corr=0.0;
+
+    //find strip with largest Q
+    for(int i=0;(unsigned)i<nOfStrip->size();i++)
+    {
+        if(largerStipQ<qOfStrip->at(i))
+        {
+            largerStipQ=qOfStrip->at(i);
+            largerStipN=nOfStrip->at(i);
+        }
+    }
+
+    //find left and right strips
+    bool lbin=0, rbin=0;
+    double lbinQ=0, rbinQ=0, lbinN=0, rbinN=0;
+    for(int i=0;(unsigned)i<nOfStrip->size();i++)
+    {
+        if(nOfStrip->at(i)==largerStipN-1)
+        {
+            lbin=1;
+            lbinQ=qOfStrip->at(i);
+            lbinN=nOfStrip->at(i);
+        }
+        if(nOfStrip->at(i)==largerStipN+1)
+        {
+            rbin=1;
+            rbinQ=qOfStrip->at(i);
+            rbinN=nOfStrip->at(i);
+        }
+    }
+
+    //if clSize>=3
+    if(lbin && rbin)
+    {
+        if(lbinQ>rbinQ)
+        {
+            eta_corr = (largerStipQ)/(largerStipQ+lbinQ);
+            PosOfLeft = lbinN;
+        }
+        else
+        {
+            eta_corr = (rbinQ)/(largerStipQ+rbinQ);
+            PosOfLeft = largerStipN;
+        }
+    }
+    //right / right+left
+    else if(lbin)
+    {
+        eta_corr = (largerStipQ)/(largerStipQ+lbinQ);
+        PosOfLeft = lbinN;
+    }
+    //right / right+left
+    else if(rbin)
+    {
+        eta_corr = (rbinQ)/(largerStipQ+rbinQ);
+        PosOfLeft = largerStipN;
+    }
 }

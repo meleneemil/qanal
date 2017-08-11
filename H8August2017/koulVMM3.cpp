@@ -2,26 +2,29 @@
 //-------SETUP
 int g_boardId0=0;
 int g_boardId1=1;
-int g_boardDistance_mm=65;
+int g_boardDistance_mm=37;
 int g_PdoPedestal = 32;
 double g_correctionSlope = -0.0061;
 double g_MultiClusterSearchOffset01_mm=-0.6194;//this is taken from our single cluster event run, to know the misalignment of our chambers
-double g_MultiClusterSearchEpsilon_mm=2.5;//this is the error allowed when looking for the pair-cluster 1.5mm away e.g..
+double g_MultiClusterSearchEpsilon_mm=1.;//this is the error allowed when looking for the pair-cluster 1.5mm away e.g..
 bool eventByEvent=false;
+bool doClusterisation=true;
 bool doSingleClusterEventAnalysis=true;
 bool doMultiClusterEventAnalysis=true;
+bool doEtaCorrection=false;
+bool isEtaCorrectionHistoFilled=false;//leave it false
 TLine *l1;
 
 //--------------------------------------GLOBAL strip cuts config
 int cut_strip_minPerChipEvent=2;
 
 //PDO TDO cuts
-int cut_strip_minPdo=60;
-int cut_strip_minTdo=20;
+int cut_strip_minPdo=32;//don't put this lower than g_PdoPedestal
+int cut_strip_minTdo=10;
 
 //edge cuts
-int cut_strip_maxStrip= 48;
-int cut_strip_minStrip= 2;
+int cut_strip_maxStrip= 60;
+int cut_strip_minStrip= 2;//was 2
 
 vector<int> *cut_strip_noisySet = new vector<int>();//remove these strips from the ones to be clusterised
 
@@ -32,10 +35,17 @@ int cut_cluster_minClusterCharge=50;
 int cut_cluster_maxClusterTimeWidth=50;
 int cut_cluster_minClusterTimeWidth=-1;
 int cut_cluster_minClusterSize = 2;
-int cut_cluster_maxClusterSize = 7;
+int cut_cluster_maxClusterSize = 8;
+double cut_cluster_etaRatio_highCut=1.;
+double cut_cluster_etaRatio_lowCut=0.0;
+
 //vector<int> cut_cluster_stripContainBlacklist;//kill cluster if contains any of these strips | Let's leave this for now...
 vector<int> *cut_cluster_stripNeighbourBlacklist = new vector<int>();//kill cluster if is 1st neighbour with any of these strips
+vector<int> *cut_cluster_stripNeighbourBlacklist0 = new vector<int>();//kill cluster if is 1st neighbour with any of these strips
+vector<int> *cut_cluster_stripNeighbourBlacklist1 = new vector<int>();//kill cluster if is 1st neighbour with any of these strips
 
+//--------------------------------------EVENT CUTS config
+int cut_event_maxNClustersPerBoard=3;
 //-----------------------------------  Histograms
 
 TH1D* h_bp_board0 = new TH1D("h_bp_board0","h_bp_board0",64,0,64);
@@ -63,6 +73,12 @@ TH2D* h_tdoVSchannel_board1 = new TH2D("h_tdoVSchannel_board1","h_tdoVSchannel_b
 TH2D* h_bcidVSchannel_board1 = new TH2D("h_bcidVSchannel_board1","h_bcidVSchannel_board1",64,0,64,256,0,256);
 TH2D* h_pdoVStdo_board1 = new TH2D("h_pdoVStdo_board1","h_pdoVStdo_board1",256,0,256,1024,0,1024);
 TH2D* h_pdoVSbcid_board1 = new TH2D("h_pdoVSbcid_board1","h_pdoVSbcid_board1",4096,0,4096,1024,0,1024);
+
+//------- Reverse Beam profile
+//single cluster on one
+//no cluster on the other
+TH1D* h_reverseBeamProfile_board0 = new TH1D("h_reverseBeamProfile_board0","h_reverseBeamProfile_board0",240,0,64*.4);
+TH1D* h_reverseBeamProfile_board1 = new TH1D("h_reverseBeamProfile_board1","h_reverseBeamProfile_board1",240,0,64*.4);
 
 //------- SINGLE CLUSTER
 
@@ -105,12 +121,25 @@ TCanvas* c_ev;
 
 TH1D* h_ev_pdo_board0 = new TH1D("h_ev_pdo_board0","h_ev_pdo_board0",64,0,64);
 TH1D* h_ev_tdo_board0 = new TH1D("h_ev_tdo_board0","h_ev_tdo_board0",64,0,64);
+TGraph *tg_ev_tdo_board0 = new TGraph(64);
 TH1D* h_ev_bcid_board0 = new TH1D("h_ev_bcid_board0","h_ev_bcid_board0",64,0,64);
 
 TH1D* h_ev_pdo_board1 = new TH1D("h_ev_pdo_board1","h_ev_pdo_board1",64,0,64);
 TH1D* h_ev_tdo_board1 = new TH1D("h_ev_tdo_board1","h_ev_tdo_board1",64,0,64);
+TGraph *tg_ev_tdo_board1 = new TGraph(64);
 TH1D* h_ev_bcid_board1 = new TH1D("h_ev_bcid_board1","h_ev_bcid_board1",64,0,64);
 
+//------------------------------ ETA CORRECTION (when cl_size>=2strip, check the ratios)
+TH1D* h_etaRatio_board0 = new TH1D("h_etaRatio_board0","h_etaRatio_board0",200,0,1);
+TH1D* h_etaRatio_board1 = new TH1D("h_etaRatio_board1","h_etaRatio_board1",200,0,1);
+TH2D* h_eta0_vs_diff = new TH2D("h_eta0_vs_diff","h_eta0_vs_diff",200,-2/g_boardDistance_mm,2/g_boardDistance_mm,200,0,1);
+TH2D* h_eta1_vs_diff = new TH2D("h_eta1_vs_diff","h_eta1_vs_diff",200,-2/g_boardDistance_mm,2/g_boardDistance_mm,200,0,1);
+
+TH1D* h_qL = new TH1D("h_qL","h_L",256,0,1024);
+TH1D* h_qR = new TH1D("h_qR","h_R",256,0,1024);
+TH2D* h_qL_vs_qR = new TH2D("h_qL_vs_qR","h_qL_vs_qR",256,0,1024,256,0,1024);
+TH2D* h_qSmall_vs_qLarge = new TH2D("h_qSmall_vs_qLarge","h_qSmall_vs_qLarge",256,0,1024,256,0,1024);
+TH2D* h_eta_vs_smallQ = new TH2D("h_eta_vs_smallQ","h_eta_vs_smallQ",256,0,1024,200,0,1.0);
 //------------------- Clusterization vars
 
 
@@ -141,6 +170,15 @@ vector<int> *v_toCl_channel_board1;
 vector<int> *v_toCl_pdo_board1;
 vector<int> *v_toCl_tdo_board1;
 vector<int> *v_toCl_bcid_board1;
+vector<double>* cl_sizes0   ;
+vector<double>* cl_sizes1   ;
+vector<double>* cl_charges0 ;
+vector<double>* cl_charges1 ;
+vector<double>* cl_poss0    ;
+vector<double>* cl_poss1    ;
+vector<double>* cl_etaRatio_values0;
+vector<double>* cl_etaRatio_values1;
+
 
 //############################################################
 string cmdInput="";
@@ -153,14 +191,20 @@ void initialize()
     //    l1
     cut_strip_noisySet->push_back(63);
 
-    cut_cluster_stripNeighbourBlacklist->push_back(8);
-    cut_cluster_stripNeighbourBlacklist->push_back(17);
-    cut_cluster_stripNeighbourBlacklist->push_back(21);
-    cut_cluster_stripNeighbourBlacklist->push_back(48);
+    //    cut_cluster_stripNeighbourBlacklist->push_back(8);
+    //    cut_cluster_stripNeighbourBlacklist->push_back(17);
+    //    cut_cluster_stripNeighbourBlacklist->push_back(21);
+    //    cut_cluster_stripNeighbourBlacklist->push_back(48);
+
+    //    cut_cluster_stripNeighbourBlacklist0->push_back(21);
+
+    cut_cluster_stripNeighbourBlacklist1->push_back(8);
+    //    cut_cluster_stripNeighbourBlacklist1->push_back(17);
+    cut_cluster_stripNeighbourBlacklist1->push_back(47);
 
     gStyle->SetLabelSize(0.1,"Y");
     gStyle->SetOptStat(111111);
-//    gStyle->SetStatH(0.5);
+    //    gStyle->SetStatH(0.5);
     gStyle->SetTitleFontSize(0.1);
 
     h_ev_pdo_board0->SetLineColor(kRed);
@@ -248,18 +292,18 @@ void drawHistos()
 
     c_singleClusterStatistics_boards->cd(3);
     h_clPos_board0->Draw();
-    for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist->size();iStrip++)
+    for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist0->size();iStrip++)
     {
-        l1 = new TLine(cut_cluster_stripNeighbourBlacklist->at(iStrip)*0.4+.4,-0,cut_cluster_stripNeighbourBlacklist->at(iStrip)*.4+.4,h_clPos_board0->GetMaximum());
+        l1 = new TLine(cut_cluster_stripNeighbourBlacklist0->at(iStrip)*0.4+.4,-0,cut_cluster_stripNeighbourBlacklist0->at(iStrip)*.4+.4,h_clPos_board0->GetMaximum());
         l1->SetLineWidth(5);
         l1->SetLineStyle(9);
         l1->Draw();
     }
     c_singleClusterStatistics_boards->cd(4);
     h_clPos_board1->Draw();
-    for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist->size();iStrip++)
+    for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist1->size();iStrip++)
     {
-        l1 = new TLine(cut_cluster_stripNeighbourBlacklist->at(iStrip)*.4+.4,-0,cut_cluster_stripNeighbourBlacklist->at(iStrip)*.4+.4,h_clPos_board1->GetMaximum());
+        l1 = new TLine(cut_cluster_stripNeighbourBlacklist1->at(iStrip)*.4+.4,-0,cut_cluster_stripNeighbourBlacklist1->at(iStrip)*.4+.4,h_clPos_board1->GetMaximum());
         l1->SetLineWidth(5);
         l1->SetLineStyle(9);
         l1->Draw();
@@ -298,18 +342,18 @@ void drawHistos()
 
     c_multiClusterStatistics_boards->cd(3);
     h_multiCluster_clPos_board0->Draw();
-    for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist->size();iStrip++)
+    for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist0->size();iStrip++)
     {
-        l1 = new TLine(cut_cluster_stripNeighbourBlacklist->at(iStrip)*0.4+.4,-0,cut_cluster_stripNeighbourBlacklist->at(iStrip)*.4+.4,h_clPos_board0->GetMaximum());
+        l1 = new TLine(cut_cluster_stripNeighbourBlacklist0->at(iStrip)*0.4+.4,-0,cut_cluster_stripNeighbourBlacklist0->at(iStrip)*.4+.4,h_clPos_board0->GetMaximum());
         l1->SetLineWidth(5);
         l1->SetLineStyle(9);
         l1->Draw();
     }
     c_multiClusterStatistics_boards->cd(4);
     h_multiCluster_clPos_board1->Draw();
-    for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist->size();iStrip++)
+    for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist1->size();iStrip++)
     {
-        l1 = new TLine(cut_cluster_stripNeighbourBlacklist->at(iStrip)*.4+.4,-0,cut_cluster_stripNeighbourBlacklist->at(iStrip)*.4+.4,h_clPos_board1->GetMaximum());
+        l1 = new TLine(cut_cluster_stripNeighbourBlacklist1->at(iStrip)*.4+.4,-0,cut_cluster_stripNeighbourBlacklist1->at(iStrip)*.4+.4,h_clPos_board1->GetMaximum());
         l1->SetLineWidth(5);
         l1->SetLineStyle(9);
         l1->Draw();
@@ -333,8 +377,8 @@ void drawHistos()
     //    fit_dgaus_sameMean(h_multiCluster_res);
 
     TCanvas *tcMulti=new TCanvas("resH8July2017_Multiple","resH8July2017_Multiple",150,50,700,700);
-//    fit_dgaus(h_multiCluster_res);
-        fit_dgaus_sameMean(h_multiCluster_res);
+    //    fit_dgaus(h_multiCluster_res);
+    fit_dgaus_sameMean(h_multiCluster_res);
 
     TCanvas *c_Multi_diff_vs_pos = new TCanvas("c_Multi_diff_vs_pos","c_Multi_diff_vs_pos",250,10,600,600);
     c_Multi_diff_vs_pos->Divide(2,1);
@@ -347,6 +391,33 @@ void drawHistos()
     TCanvas *c_angle = new TCanvas("c_angle","c_angle",40,40,400,400);
     h_multiCluster_diff_over_d01->Draw();
 
+    TCanvas *c_eta = new TCanvas("c_eta","c_eta",60,70,600,600);
+    c_eta->Divide(2,2);
+    c_eta->cd(1);
+    h_etaRatio_board0->Draw();
+    c_eta->cd(2);
+    h_etaRatio_board1->Draw();
+    c_eta->cd(3);
+    h_eta0_vs_diff->Draw("colz");
+    c_eta->cd(4);
+    h_eta1_vs_diff->Draw("colz");
+    TCanvas *c_eta2 = new TCanvas("h_eta_vs_smallQ","h_eta_vs_smallQ",40,40,400,500);
+    c_eta2->Divide(2,2);
+    c_eta2->cd(1);
+    h_eta_vs_smallQ->Draw("colz");
+    c_eta2->cd(2);
+    h_qL_vs_qR->Draw("colz");
+    c_eta2->cd(3);
+    h_qSmall_vs_qLarge->Draw("colz");
+    //    c_eta->cd(6);
+    //    h_qR->Draw();
+
+    TCanvas *c_reverseBeamProfile = new TCanvas("c_reverseBeamProfile","c_reverseBeamProfile",60,60,600,600);
+    c_reverseBeamProfile->Divide(2,1);
+    c_reverseBeamProfile->cd(1);
+    h_reverseBeamProfile_board0->Draw();
+    c_reverseBeamProfile->cd(2);
+    h_reverseBeamProfile_board1->Draw();
 
 }
 
@@ -385,15 +456,104 @@ void getClusterCombinationIndices_wSearchOffset(vector<double>* cl_poss_board0,
         }//1 loop
     }//0 loop
 }
-
+int dsa=0;
 vector<vector<int>*>* getClusterIndices(vector<int> *toCl_channel,
                                         vector<int> *toCl_pdo,
                                         vector<int> *toCl_tdo,
-                                        vector<int> *toCl_bcid
+                                        vector<int> *toCl_bcid,
+                                        int currentBoardId
                                         )
 {
+    vector <double> *test_pdo = new vector<double>();
+    for(int i=0;i<toCl_pdo->size();i++)
+    {
+        test_pdo->push_back((double) toCl_pdo->at(i));
+    }
+
+    //try eta here:
+    if(toCl_channel->size()==2 && false)
+    {
+        if(toCl_channel->at(0)==toCl_channel->at(1)-1)
+        {
+            double qL = toCl_pdo->at(0)*1.0;
+            double qR = toCl_pdo->at(1)*1.0;
+            double eta = qR/(qL+qR);
+            if(currentBoardId==0)
+                h_etaRatio_board0->Fill(eta);
+            if(currentBoardId==1)
+                h_etaRatio_board1->Fill(eta);
+//            h_qLvsqR->Fill(qR,qL);
+        }
+        else if(toCl_channel->at(0)-1==toCl_channel->at(1))
+            cout << "## Found non sorted\n";//never goes here
+        else if(TMath::Abs(toCl_channel->at(0)-toCl_channel->at(1))==2)
+        {
+            cout <<"## clsize=2, but with 1 space #"<<dsa<<endl;
+            dsa++;
+        }
+    }
+
+    //try eta here:
+    if(toCl_channel->size()==3 && false)
+    {
+        int i1=toCl_channel->at(0);
+        int i2=toCl_channel->at(1);
+        int i3=toCl_channel->at(2);
+
+        if(i1==i2-1
+                && i2==i3-1)
+        {
+            double qL = toCl_pdo->at(0)*1.0;
+            double qR = toCl_pdo->at(2)*1.0;
+            double qM = toCl_pdo->at(1)*1.0;
+
+            if(qM>qL && qM>qR)
+            {
+                double eta;
+                if(qL>qR)
+                    eta = qM / (qM+qL);
+                else
+                    eta = qR/(qM+qR);
+
+
+                if(currentBoardId==0)
+                    h_etaRatio_board0->Fill(eta);
+                if(currentBoardId==1)
+                    h_etaRatio_board1->Fill(eta);
+//                h_qLvsqR->Fill(qR,qL);
+            }
+        }
+    }
+
+    if(toCl_channel->size()==2 && false)
+    {
+        double eta;
+        double shit;
+
+        GiveEtaCorrection(toCl_channel,test_pdo,eta,shit);
+
+
+        if(eta!=0)
+        {
+            if(currentBoardId==0)
+                h_etaRatio_board0->Fill(eta);
+            if(currentBoardId==1)
+                h_etaRatio_board1->Fill(eta);
+        }
+        //        h_qLvsqR->Fill(qR,qL);
+    }
+
     //this function returns a vector foreach cluster that is made.
     //each vector contains the corresponding indices from the input vector
+
+    vector<int> *cutStripNeighbours;
+    if(currentBoardId==0)
+        cutStripNeighbours = cut_cluster_stripNeighbourBlacklist0;
+    else if(currentBoardId==1)
+        cutStripNeighbours = cut_cluster_stripNeighbourBlacklist1;
+
+    if(eventByEvent)
+        cout << "--- Clusters Board"<<currentBoardId<<endl;
 
     vector< vector < int >* > *clusters=new vector<vector<int>*>();
     vector<int> *newClusterIndices;
@@ -462,12 +622,36 @@ vector<vector<int>*>* getClusterIndices(vector<int> *toCl_channel,
 
         if(closeCluster)
         {
+
+
             if(eventByEvent)
                 cout << "cluster #"<< newClusterTries <<" | ";
             //------------------------------------- Cluster-wide Cuts
             bool clusterPassedCuts=true;
             int clusterTimeWidth = maxBcid-minBcid;
             int clusterSize = newClusterIndices->size();
+
+
+//                        if(clusterSize==2)
+//                        {
+//                            double qL = toCl_pdo->at(newClusterIndices->at(0))*1.0;
+//                            double qR = toCl_pdo->at(newClusterIndices->at(1))*1.0;
+
+//                            //cout << "#### "<<newClusterIndices->at(0)<< " has q="<<qL<<" and "<<newClusterIndices->at(1)<<" has q="<<qR<<endl;
+
+//                            double eta = qR/(qL+qR);
+
+//                            if(currentBoardId==0)
+//                                h_etaRatio_board0->Fill(eta);
+//                            else if(currentBoardId==1)
+//                                h_etaRatio_board1->Fill(eta);
+
+//                            h_qL->Fill(qL);
+//                            h_qR->Fill(qR);
+//                            h_qLvsqR->Fill(qR,qL);
+//                        }
+
+
 
             //check cluster charge and Size and TimeWidth(?)
 
@@ -500,11 +684,10 @@ vector<vector<int>*>* getClusterIndices(vector<int> *toCl_channel,
             //            }
 
             //scan for bad strips
-
             if(clusterPassedCuts)
-                for(int j=0;j<cut_cluster_stripNeighbourBlacklist->size();j++)
+                for(int j=0;j<cutStripNeighbours->size();j++)
                 {
-                    int iStrip = cut_cluster_stripNeighbourBlacklist->at(j);
+                    int iStrip = cutStripNeighbours->at(j);
                     if(
                             toCl_channel->at(newClusterIndices->at(0))-1<=iStrip //a bad strip is 1st low neighbour or in the cluster
                             && toCl_channel->at(newClusterIndices->back())+1>=iStrip//a bad strip is 1st hi neghbour   or -- // --
@@ -526,6 +709,55 @@ vector<vector<int>*>* getClusterIndices(vector<int> *toCl_channel,
                 }
 
 
+            //-----------------------ETA CORRECTION:
+
+            if(clusterPassedCuts)
+            {
+                if(clusterSize==2)
+                {
+                    double eta = toCl_pdo->at(newClusterIndices->at(0))*1.0 / (toCl_pdo->at(newClusterIndices->at(0))*1.0 + toCl_pdo->at(newClusterIndices->at(1))*1.0 );
+
+                    if(eta>cut_cluster_etaRatio_highCut)
+                        clusterPassedCuts=false;
+                    if(eta<cut_cluster_etaRatio_lowCut)
+                        clusterPassedCuts=false;
+                }
+            }
+
+            //-----------------------ETA CORRECTION: HISTO FILL
+            if(clusterPassedCuts && true)
+            {
+                //fill the histo only in the first run (after which the flag 'filled' will goto 1)
+                                if(clusterSize==2 && isEtaCorrectionHistoFilled==0)
+                                {
+                                    double qL = toCl_pdo->at(newClusterIndices->at(0))*1.0;
+                                    double qR = toCl_pdo->at(newClusterIndices->at(1))*1.0;
+
+                //                    cout << "#### "<<newClusterIndices->at(0)<< " has q="<<qL<<" and "<<newClusterIndices->at(1)<<" has q="<<qR<<endl;
+
+                                    double eta = qR/(qL+qR);
+
+                                    if(currentBoardId==0)
+                                        h_etaRatio_board0->Fill(eta);
+                                    else if(currentBoardId==1)
+                                        h_etaRatio_board1->Fill(eta);
+
+                                    h_qL_vs_qR->Fill(qR,qL);
+
+                                    if(qL<qR)
+                                    {
+                                        h_eta_vs_smallQ->Fill(qL,eta);
+                                        h_qSmall_vs_qLarge->Fill(qR,qL);
+                                    }
+                                    else
+                                    {
+                                        h_eta_vs_smallQ->Fill(qR,eta);
+                                        h_qSmall_vs_qLarge->Fill(qL,qR);
+                                    }
+                                }
+            }
+
+            //-----IF ALL TESTS PASSED, ADD TO vector
             if(clusterPassedCuts)
             {//add the cluster
                 clusters->push_back(newClusterIndices);
@@ -555,24 +787,24 @@ vector<vector<int>*>* getClusterIndices(vector<int> *toCl_channel,
     return clusters;
 }
 
-void subEventLoop(int iEntry, bool doClusterisation)
+void subEventLoop(int iEntry)
 {
     i_stripPerEvent0=0;
     i_stripPerEvent1=0;
 
+    v_toCl_channel_board0 = new vector<int>();
+    v_toCl_pdo_board0     = new vector<int>();
+    v_toCl_tdo_board0     = new vector<int>();
+    v_toCl_bcid_board0    = new vector<int>();
+    v_toCl_channel_board1 = new vector<int>();
+    v_toCl_pdo_board1     = new vector<int>();
+    v_toCl_tdo_board1     = new vector<int>();
+    v_toCl_bcid_board1    = new vector<int>();
 
-    //    v_cl_boardId->clear();
-    if(doClusterisation)
-    {
-        v_toCl_channel_board0 = new vector<int>();
-        v_toCl_pdo_board0     = new vector<int>();
-        v_toCl_tdo_board0     = new vector<int>();
-        v_toCl_bcid_board0    = new vector<int>();
-        v_toCl_channel_board1 = new vector<int>();
-        v_toCl_pdo_board1     = new vector<int>();
-        v_toCl_tdo_board1     = new vector<int>();
-        v_toCl_bcid_board1    = new vector<int>();
-    }
+    tg_ev_tdo_board0 = new TGraph(64);
+    tg_ev_tdo_board0->Set(0);
+    tg_ev_tdo_board1 = new TGraph(64);
+    tg_ev_tdo_board1->Set(0);
 
     //loop over the chips of the event
     for(int iSubEvent=0;iSubEvent < vmm_tree->chip->size();iSubEvent++)
@@ -623,6 +855,7 @@ void subEventLoop(int iEntry, bool doClusterisation)
                 if(eventByEvent)
                 {
                     h_ev_pdo_board0->SetBinContent(channel+1,pdo);
+                    tg_ev_tdo_board0->SetPoint(tg_ev_tdo_board0->GetN(),channel+1,tdo);
                     h_ev_tdo_board0->SetBinContent(channel+1,tdo);
                     h_ev_bcid_board0->SetBinContent(channel+1,bcid);
                 }
@@ -654,6 +887,7 @@ void subEventLoop(int iEntry, bool doClusterisation)
                 {
                     h_ev_pdo_board1->SetBinContent(channel+1,pdo);
                     h_ev_tdo_board1->SetBinContent(channel+1,tdo);
+                    tg_ev_tdo_board1->SetPoint(tg_ev_tdo_board1->GetN(),channel+1,tdo);
                     h_ev_bcid_board1->SetBinContent(channel+1,bcid);
                 }
                 if(doClusterisation)
@@ -670,173 +904,105 @@ void subEventLoop(int iEntry, bool doClusterisation)
 
     }//subEvent loop
 
-    h_stripPerEv_board0->Fill(i_stripPerEvent0);
-    h_stripPerEv_board1->Fill(i_stripPerEvent1);
+}
+void eventLoop_singleClusterFills()
+{
+
+    //--------try: Reverse Beam Profiles, to check for the pillars perhaps (normally needs tracking, but what the hey...)
+
+    if(doSingleClusterEventAnalysis
+            && cl_poss0->size()==1
+            && cl_poss1->size()==0)
+        h_reverseBeamProfile_board0->Fill(cl_poss0->at(0));
+    if(doSingleClusterEventAnalysis
+            && cl_poss0->size()==0
+            && cl_poss1->size()==1)
+        h_reverseBeamProfile_board1->Fill(cl_poss1->at(0));
 
 
-    if(doClusterisation)
+    //---------NORMAL SINGLE CLUSTER EVENTS
+
+    if(doSingleClusterEventAnalysis && cl_poss0->size()==1 && cl_poss1->size()==1)
     {
-        //now we went through the strips
-        //time to clusterize
+        h_clPos_board0->Fill(cl_poss0->at(0));
+        h_clPos_board1->Fill(cl_poss1->at(0));
 
-        //board by board:
+        h_clCharge_board0->Fill(cl_charges0->at(0));
+        h_clCharge_board1->Fill(cl_charges1->at(0));
 
-        //DEBUGGING!!!
-        /*
-        cout << "\n-------Debug Event: "<<iEntry<<endl;
+        h_clSize_board0->Fill(cl_sizes0->at(0));
+        h_clSize_board1->Fill(cl_sizes1->at(0));
 
-        cout << "                                 Channels0: ";
-        for(int i=0;i<v_toCl_channel_board0->size();i++)
-            cout << v_toCl_channel_board0->at(i) <<" ";
-        cout <<endl;
-        cout << "                                 Channels1: ";
-        for(int i=0;i<v_toCl_channel_board1->size();i++)
-            cout << v_toCl_channel_board1->at(i) <<" ";
-        cout <<endl;
-*/
+        h_res->Fill(cl_poss0->at(0)-cl_poss1->at(0));
+    }
+}
+void eventLoop_multiClusterFills()
+{
 
-        if(eventByEvent)
-            cout << "--- Clusters Board"<<g_boardId0<<endl;
-        vector<vector<int>*> *clusterIndices_board0 = getClusterIndices(
-                    v_toCl_channel_board0,
-                    v_toCl_pdo_board0,
-                    v_toCl_tdo_board0,
-                    v_toCl_bcid_board0
-                    );
+    if(doMultiClusterEventAnalysis &&
+            cl_poss0->size()>=1 &&
+            cl_poss1->size()>=1 &&
+            cl_poss0->size()<= cut_event_maxNClustersPerBoard &&
+            cl_poss1->size()<= cut_event_maxNClustersPerBoard
+            )
+    {
+        //we need to know the pairs of indices to take the diffs of
+        vector<int> goodClusters0;// = new vector<int>();
+        vector<int> goodClusters1;// = new vector<int>();
 
-        if(eventByEvent)
-            cout << "--- Clusters Board"<<g_boardId1<<endl;
-        vector<vector<int>*> *clusterIndices_board1 = getClusterIndices(
-                    v_toCl_channel_board1,
-                    v_toCl_pdo_board1,
-                    v_toCl_tdo_board1,
-                    v_toCl_bcid_board1
-                    );
+        //            cout << "--- checking for\n";
+        //            cout << "cl pos0: ";
+        //            for(int k=0;k<cl_poss0->size();k++)
+        //                cout << cl_poss0->at(k)<<" ";
+        //            cout <<endl;
+        //            cout << "cl pos1: ";
+        //            for(int k=0;k<cl_poss1->size();k++)
+        //                cout << cl_poss1->at(k)<<" ";
+        //            cout <<endl;
 
+        getClusterCombinationIndices_wSearchOffset(cl_poss0,cl_poss1,goodClusters0,goodClusters1);
+        //            cout << "goodClusters0.size()="<<goodClusters0.size()<<endl;
+        //now we have the good pairs = 2 vectors of same size
 
-        h_nClu_board0->Fill(clusterIndices_board0->size());
-        h_nClu_board1->Fill(clusterIndices_board1->size());
-        h_nCluVSnClu_boards->Fill(clusterIndices_board0->size(),clusterIndices_board1->size());
-        //####################################################
-        //############## CLUSTER-WIDE CUTS
-        //####################################################
-
-        //first we fill these vectors, for any kind of event with clusters
-        vector<double>* cl_sizes0 = new vector<double>();
-        vector<double>* cl_sizes1 = new vector<double>();
-        vector<double>* cl_charges0 = new vector<double>();
-        vector<double>* cl_charges1 = new vector<double>();
-        vector<double>* cl_poss0 = new vector<double>();
-        vector<double>* cl_poss1 = new vector<double>();
-
-        for(int iCluster=0;iCluster<clusterIndices_board0->size();iCluster++)
+        for(int i=0;i<goodClusters0.size();i++)
         {
-            double size=clusterIndices_board0->at(iCluster)->size();
-            double charge=0;
-            double over=0;
+            //NOT plotting the clusters that are not paired...!!!
 
-            for(int i=0;i<clusterIndices_board0->at(iCluster)->size();i++)
+            h_multiCluster_clPos_board0   ->Fill(cl_poss0   ->at(goodClusters0.at(i)));
+            h_multiCluster_clPos_board1   ->Fill(cl_poss1   ->at(goodClusters1.at(i)));
+            h_multiCluster_clCharge_board0->Fill(cl_charges0->at(goodClusters0.at(i)));
+            h_multiCluster_clCharge_board1->Fill(cl_charges1->at(goodClusters1.at(i)));
+            h_multiCluster_clSize_board0  ->Fill(cl_sizes0  ->at(goodClusters0.at(i)));
+            h_multiCluster_clSize_board1  ->Fill(cl_sizes1  ->at(goodClusters1.at(i)));
+
+            double pos0=cl_poss0->at(goodClusters0.at(i));
+            double pos1=cl_poss1->at(goodClusters1.at(i));
+            double diff = pos0-pos1;
+            double newDiff = diff - g_correctionSlope*pos0;
+            h_multiCluster_res->Fill(newDiff-g_MultiClusterSearchOffset01_mm);
+
+
+            h_multiCluster_diff01_VS_pos0->Fill(pos0,
+                                                newDiff);
+            h_multiCluster_diff01_VS_pos1->Fill(pos1,
+                                                newDiff);
+
+
+            h_multiCluster_diff_over_d01->Fill(newDiff/g_boardDistance_mm);
+
+            if(doEtaCorrection)
             {
-                int index = clusterIndices_board0->at(iCluster)->at(i);
-                charge+= v_toCl_pdo_board0->at(index)-g_PdoPedestal;
-                over+= v_toCl_channel_board0->at(index) * (v_toCl_pdo_board0->at(index)-g_PdoPedestal);
+                h_eta0_vs_diff->Fill(newDiff,cl_etaRatio_values0->at(goodClusters0.at(i)));
+                h_eta1_vs_diff->Fill(newDiff,cl_etaRatio_values1->at(goodClusters1.at(i)));
             }
-            double pos = 0.4 * over / charge;
-
-            cl_sizes0->push_back(size);
-            cl_charges0->push_back(charge);
-            cl_poss0->push_back(pos);
-        }
-        for(int iCluster=0;iCluster<clusterIndices_board1->size();iCluster++)
-        {
-            double size=clusterIndices_board1->at(iCluster)->size();
-            double charge=0;
-            double over=0;
-
-            for(int i=0;i<clusterIndices_board1->at(iCluster)->size();i++)
-            {
-                int index = clusterIndices_board1->at(iCluster)->at(i);
-                charge+= v_toCl_pdo_board1->at(index)-g_PdoPedestal;
-                over+= v_toCl_channel_board1->at(index) * (v_toCl_pdo_board1->at(index)-g_PdoPedestal);
-            }
-            double pos = 0.4 * over / charge;
-
-            cl_sizes1->push_back(size);
-            cl_charges1->push_back(charge);
-            cl_poss1->push_back(pos);
         }
 
-        //now the vectors are filled.
-        //so now we can easily check for single or multi cluster events.
-
-        //---------------SINGLE-CLUSTER EVENTS (with nStrips>1)
-
-        if(doSingleClusterEventAnalysis && cl_poss0->size()==1 && cl_poss1->size()==1)
-        {
-            h_clPos_board0->Fill(cl_poss0->at(0));
-            h_clPos_board1->Fill(cl_poss1->at(0));
-
-            h_clCharge_board0->Fill(cl_charges0->at(0));
-            h_clCharge_board1->Fill(cl_charges1->at(0));
-
-            h_clSize_board0->Fill(cl_sizes0->at(0));
-            h_clSize_board1->Fill(cl_sizes1->at(0));
-
-            h_res->Fill(cl_poss0->at(0)-cl_poss1->at(0));
-        }
-
-        if(doMultiClusterEventAnalysis && cl_poss0->size()>=1 && cl_poss1->size()>=1)
-        {
-            //we need to know the pairs of indices to take the diffs of
-            vector<int> goodClusters0;// = new vector<int>();
-            vector<int> goodClusters1;// = new vector<int>();
-
-            //            cout << "--- checking for\n";
-            //            cout << "cl pos0: ";
-            //            for(int k=0;k<cl_poss0->size();k++)
-            //                cout << cl_poss0->at(k)<<" ";
-            //            cout <<endl;
-            //            cout << "cl pos1: ";
-            //            for(int k=0;k<cl_poss1->size();k++)
-            //                cout << cl_poss1->at(k)<<" ";
-            //            cout <<endl;
-
-            getClusterCombinationIndices_wSearchOffset(cl_poss0,cl_poss1,goodClusters0,goodClusters1);
-            //            cout << "goodClusters0.size()="<<goodClusters0.size()<<endl;
-            //now we have the good pairs = 2 vectors of same size
-
-            for(int i=0;i<goodClusters0.size();i++)
-            {
-                //NOT plotting the clusters that are not paired...!!!
-
-                h_multiCluster_clPos_board0   ->Fill(cl_poss0   ->at(goodClusters0.at(i)));
-                h_multiCluster_clPos_board1   ->Fill(cl_poss1   ->at(goodClusters1.at(i)));
-                h_multiCluster_clCharge_board0->Fill(cl_charges0->at(goodClusters0.at(i)));
-                h_multiCluster_clCharge_board1->Fill(cl_charges1->at(goodClusters1.at(i)));
-                h_multiCluster_clSize_board0  ->Fill(cl_sizes0  ->at(goodClusters0.at(i)));
-                h_multiCluster_clSize_board1  ->Fill(cl_sizes1  ->at(goodClusters1.at(i)));
-
-                double pos0=cl_poss0->at(goodClusters0.at(i));
-                double pos1=cl_poss1->at(goodClusters1.at(i));
-                double diff = pos0-pos1;
-                double newDiff = diff - g_correctionSlope*pos0;
-                h_multiCluster_res->Fill(newDiff-g_MultiClusterSearchOffset01_mm);
+    }
 
 
-                h_multiCluster_diff01_VS_pos0->Fill(pos0,
-                                                    newDiff);
-                h_multiCluster_diff01_VS_pos1->Fill(pos1,
-                                                    newDiff);
-
-
-                h_multiCluster_diff_over_d01->Fill(newDiff/g_boardDistance_mm);
-            }
-
-        }
-
-
-    }//doClusterization
-
+}
+void eventLoop_eventDisplay(int iEntry)
+{
 
     if(eventByEvent)
     {
@@ -852,30 +1018,33 @@ void subEventLoop(int iEntry, bool doClusterisation)
             c_ev->Divide(3,3);
             c_ev->cd(1);
             h_ev_pdo_board0->Draw();
-            for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist->size();iStrip++)
+            for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist0->size();iStrip++)
             {
-                l1 = new TLine(cut_cluster_stripNeighbourBlacklist->at(iStrip)+.4,-0,cut_cluster_stripNeighbourBlacklist->at(iStrip)+.4,h_ev_pdo_board0->GetMaximum());
+                l1 = new TLine(cut_cluster_stripNeighbourBlacklist0->at(iStrip)+.4,-0,cut_cluster_stripNeighbourBlacklist0->at(iStrip)+.4,h_ev_pdo_board0->GetMaximum());
                 l1->SetLineWidth(5);
                 l1->SetLineStyle(9);
                 l1->Draw();
             }
             c_ev->cd(2);
-            h_ev_tdo_board0->Draw();
+//            h_ev_tdo_board0->Draw();
+            tg_ev_tdo_board0->Draw("AL*");
+//            tg_ev_tdo_board0->GetXaxis()->SetRange(0,64);
             c_ev->cd(3);
             gPad->SetLogy();
             h_ev_bcid_board0->Draw();
 
             c_ev->cd(4);
             h_ev_pdo_board1->Draw();
-            for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist->size();iStrip++)
+            for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist1->size();iStrip++)
             {
-                l1 = new TLine(cut_cluster_stripNeighbourBlacklist->at(iStrip)+.4,-0,cut_cluster_stripNeighbourBlacklist->at(iStrip)+.4,h_ev_pdo_board0->GetMaximum());
+                l1 = new TLine(cut_cluster_stripNeighbourBlacklist1->at(iStrip)+.4,-0,cut_cluster_stripNeighbourBlacklist1->at(iStrip)+.4,h_ev_pdo_board0->GetMaximum());
                 l1->SetLineWidth(5);
                 l1->SetLineStyle(9);
                 l1->Draw();
             }
             c_ev->cd(5);
-            h_ev_tdo_board1->Draw();
+//            h_ev_tdo_board1->Draw();
+            tg_ev_tdo_board1->Draw("AL*");
             c_ev->cd(6);
             gPad->SetLogy();
             h_ev_bcid_board1->Draw();
@@ -888,13 +1057,13 @@ void subEventLoop(int iEntry, bool doClusterisation)
             }
             h_ev_pdo_board0->Draw();
             h_ev_pdo_board1->Draw("sames");
-            for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist->size();iStrip++)
-            {
-                l1 = new TLine(cut_cluster_stripNeighbourBlacklist->at(iStrip)+.4,-0,cut_cluster_stripNeighbourBlacklist->at(iStrip)+.4,h_ev_pdo_board0->GetMaximum());
-                l1->SetLineWidth(5);
-                l1->SetLineStyle(9);
-                l1->Draw();
-            }
+            //            for(int iStrip=0;iStrip<cut_cluster_stripNeighbourBlacklist->size();iStrip++)
+            //            {
+            //                l1 = new TLine(cut_cluster_stripNeighbourBlacklist->at(iStrip)+.4,-0,cut_cluster_stripNeighbourBlacklist->at(iStrip)+.4,h_ev_pdo_board0->GetMaximum());
+            //                l1->SetLineWidth(5);
+            //                l1->SetLineStyle(9);
+            //                l1->Draw();
+            //            }
             c_ev->cd(8);
             h_ev_tdo_board0->Draw();
             h_ev_tdo_board1->Draw("sames");
@@ -920,14 +1089,185 @@ void subEventLoop(int iEntry, bool doClusterisation)
         h_ev_bcid_board0->Reset();
         h_ev_bcid_board1->Reset();
     }
-
-
-
-    //after clusterization, we can analyze them, inside the event.
-
 }
-void run(TString file, bool doEventByEvent=false, bool doClusterisation=false)
+
+void eventLoop(int iEntry)
 {
+    h_stripPerEv_board0->Fill(i_stripPerEvent0);
+    h_stripPerEv_board1->Fill(i_stripPerEvent1);
+
+    //now we went through the strips
+    //time to clusterize
+
+    //board by board:
+
+    //DEBUGGING!!!
+    /*
+        cout << "\n-------Debug Event: "<<iEntry<<endl;
+
+        cout << "                                 Channels0: ";
+        for(int i=0;i<v_toCl_channel_board0->size();i++)
+            cout << v_toCl_channel_board0->at(i) <<" ";
+        cout <<endl;
+        cout << "                                 Channels1: ";
+        for(int i=0;i<v_toCl_channel_board1->size();i++)
+            cout << v_toCl_channel_board1->at(i) <<" ";
+        cout <<endl;
+*/
+
+    vector<vector<int>*> *clusterIndices_board0 = getClusterIndices(
+                v_toCl_channel_board0,
+                v_toCl_pdo_board0,
+                v_toCl_tdo_board0,
+                v_toCl_bcid_board0,
+                0
+                );
+
+    vector<vector<int>*> *clusterIndices_board1 = getClusterIndices(
+                v_toCl_channel_board1,
+                v_toCl_pdo_board1,
+                v_toCl_tdo_board1,
+                v_toCl_bcid_board1,
+                1
+                );
+
+    h_nClu_board0->Fill(clusterIndices_board0->size());
+    h_nClu_board1->Fill(clusterIndices_board1->size());
+    h_nCluVSnClu_boards->Fill(clusterIndices_board0->size(),clusterIndices_board1->size());
+
+    //####################################################
+    //############## CLUSTER-WIDE CUTS
+    //####################################################
+
+    //first we fill these vectors, for any kind of event with clusters
+    cl_sizes0   = new vector<double>();
+    cl_sizes1   = new vector<double>();
+    cl_charges0 = new vector<double>();
+    cl_charges1 = new vector<double>();
+    cl_poss0    = new vector<double>();
+    cl_poss1    = new vector<double>();
+    cl_etaRatio_values0    = new vector<double>();
+    cl_etaRatio_values1    = new vector<double>();
+
+    //---------CALCULATE CLUSTER POSITIONS
+    for(int iCluster=0;iCluster<clusterIndices_board0->size();iCluster++)
+    {
+        double size=clusterIndices_board0->at(iCluster)->size();
+        double charge=0;
+        double over=0;
+
+        for(int i=0;i<clusterIndices_board0->at(iCluster)->size();i++)
+        {
+            int index = clusterIndices_board0->at(iCluster)->at(i);
+            charge+= v_toCl_pdo_board0->at(index)-g_PdoPedestal;
+            over+= v_toCl_channel_board0->at(index) * (v_toCl_pdo_board0->at(index)-g_PdoPedestal);
+        }
+        double pos = 0.4 * over / charge;
+
+        cl_sizes0->push_back(size);
+        cl_charges0->push_back(charge);
+        cl_poss0->push_back(pos);
+    }
+    for(int iCluster=0;iCluster<clusterIndices_board1->size();iCluster++)
+    {
+        double size=clusterIndices_board1->at(iCluster)->size();
+        double charge=0;
+        double over=0;
+
+        for(int i=0;i<clusterIndices_board1->at(iCluster)->size();i++)
+        {
+            int index = clusterIndices_board1->at(iCluster)->at(i);
+            charge+= v_toCl_pdo_board1->at(index)-g_PdoPedestal;
+            over+= v_toCl_channel_board1->at(index) * (v_toCl_pdo_board1->at(index)-g_PdoPedestal);
+        }
+        double pos = 0.4 * over / charge;
+
+        cl_sizes1->push_back(size);
+        cl_charges1->push_back(charge);
+        cl_poss1->push_back(pos);
+    }
+
+    //------ check clsize==2, to recalculate the pos
+    //------------ETA CORRECTION (POS CORRECTING!!!)
+
+    if(doEtaCorrection && isEtaCorrectionHistoFilled==1)
+    {
+        for(int iCluster=0;iCluster<clusterIndices_board0->size();iCluster++)
+        {
+            double size=clusterIndices_board0->at(iCluster)->size();
+            if(size>=2)
+            {
+                double chLeft = v_toCl_pdo_board0->at(clusterIndices_board0->at(iCluster)->at(0));
+                double chRight = v_toCl_pdo_board0->at(clusterIndices_board0->at(iCluster)->at(1));
+                double P=chLeft/(chLeft+chRight);
+                double N0 = h_etaRatio_board0->GetEntries();
+
+                double etaIntegral;
+                {
+                    double xmin = 0;
+                    double xmax=P;
+                    TAxis *axis = h_etaRatio_board0->GetXaxis();
+                    int bmin = axis->FindBin(xmin); //in your case xmin=-1.5
+                    int bmax = axis->FindBin(xmax); //in your case xmax=0.8
+                    etaIntegral = h_etaRatio_board0->Integral(bmin,bmax);
+                    etaIntegral-= h_etaRatio_board0->GetBinContent(bmin) *  ( xmin-axis->GetBinLowEdge(bmin))    /axis->GetBinWidth(bmin);
+                    etaIntegral-= h_etaRatio_board0->GetBinContent(bmax) *  ( axis->GetBinUpEdge(bmax)-xmax )    /axis->GetBinWidth(bmax);
+                }
+                double eta_cor_cluster_pos = P / N0 * etaIntegral;
+                cl_etaRatio_values0->push_back(P);
+                cl_poss0->at(iCluster)=eta_cor_cluster_pos;
+
+            }
+        }//0
+        for(int iCluster=0;iCluster<clusterIndices_board1->size();iCluster++)
+        {
+            double size=clusterIndices_board1->at(iCluster)->size();
+            if(size>=2)
+            {
+                double chLeft = v_toCl_pdo_board1->at(clusterIndices_board1->at(iCluster)->at(0));
+                double chRight = v_toCl_pdo_board1->at(clusterIndices_board1->at(iCluster)->at(1));
+                double P=chLeft/(chLeft+chRight);
+                double N0 = h_etaRatio_board1->GetEntries();
+
+                double etaIntegral;
+                {
+                    double xmin = 0;
+                    double xmax=P;
+                    TAxis *axis = h_etaRatio_board1->GetXaxis();
+                    int bmin = axis->FindBin(xmin); //in your case xmin=-1.5
+                    int bmax = axis->FindBin(xmax); //in your case xmax=0.8
+                    etaIntegral = h_etaRatio_board1->Integral(bmin,bmax);
+                    etaIntegral-= h_etaRatio_board1->GetBinContent(bmin) *  ( xmin-axis->GetBinLowEdge(bmin))    /axis->GetBinWidth(bmin);
+                    etaIntegral-= h_etaRatio_board1->GetBinContent(bmax) *  ( axis->GetBinUpEdge(bmax)-xmax )    /axis->GetBinWidth(bmax);
+                }
+                double eta_cor_cluster_pos = P / N0 * etaIntegral;
+                cl_etaRatio_values1->push_back(P);
+                cl_poss1->at(iCluster)=eta_cor_cluster_pos;
+            }
+        }//1
+    }//    if(doEtaCorrection && isEtaCorrectionHistoFilled==1)
+
+    if(
+            (doEtaCorrection && isEtaCorrectionHistoFilled)
+            ||
+            (!doEtaCorrection && !isEtaCorrectionHistoFilled)
+            )
+    {
+        //now the vectors are filled.
+        //so now we can easily check for single or multi cluster events.
+
+        eventLoop_singleClusterFills();
+        eventLoop_multiClusterFills();
+        eventLoop_eventDisplay(iEntry);
+    }
+}
+void run(TString file, bool doEventByEvent=false)
+{
+    if(g_PdoPedestal>cut_strip_minPdo)
+    {
+        cout << "cut_strip_minPdo="<<cut_strip_minPdo<<" is lower than g_PdoPedestal="<<g_PdoPedestal<<" ...exiting\n";
+        exit(0);
+    }
     //load file
     load_tree_objects(file);
 
@@ -940,28 +1280,43 @@ void run(TString file, bool doEventByEvent=false, bool doClusterisation=false)
     if(eventByEvent)
         c_ev = new TCanvas("c_event","c_event",100,100,700,900);
 
-    for(int iEntry=0;iEntry<nEntries;iEntry++)
+    double timesToRun=1;
+    if(doEtaCorrection)
+        timesToRun=2;
+
+    //just to stupidly force it to run again, to first fill the eta histos
+    //and then to rerun, in order to correct the 2-strip cluster positions
+
+    for(int i=0;i<timesToRun;i++)
     {
-        vmm_tree->GetEntry(iEntry);
-        printPercentage(iEntry,nEntries);
+        for(int iEntry=0;iEntry<nEntries;iEntry++)
+        {
+            vmm_tree->GetEntry(iEntry);
+            printPercentage(iEntry,nEntries);
 
-        if(eventByEvent)
-            cout << "\n--------------EVENT "<<iEntry<<" ------\n";
-        //foreach entry (event) we loop over the subEvents
-        subEventLoop(iEntry,doClusterisation);
+            if(eventByEvent)
+                cout << "\n--------------EVENT "<<iEntry<<" ------\n";
+            //foreach entry (event) we loop over the subEvents
+            subEventLoop(iEntry);
 
-        //        cout <<endl;
+            eventLoop(iEntry);
+        }
 
-    }//entry loop
+        if(doEtaCorrection)
+            isEtaCorrectionHistoFilled=true;
+    }
+
     cout <<endl;
 
     drawHistos();
 
-    cout << "DONE (singleCluster): ADD -32 FOR PDSTAL\n";
-    cout << "DONE (multiCluster): ADD -32 FOR PDSTAL\n";
-    cout << "TODO: dgaus without mean\n";
-    cout << "TODO: multiCluster events";
-    cout << "TODO: add angle plot (Dx/d) \n";
+    //    cout << "DONE (singleCluster): ADD -32 FOR PDSTAL\n";
+    //    cout << "DONE (multiCluster): ADD -32 FOR PDSTAL\n";
+    //    cout << "TODO: dgaus without mean\n";
+    //    cout << "DONE: bad neighobur strips, split for both boards";
+    //    cout << "DONE: multiCluster events";
+    //    cout << "DONE: add angle plot (Dx/d) \n";
+    cout << "TODO: reverse beam profiles for TLP etc\n";
 }
 /*
  *
